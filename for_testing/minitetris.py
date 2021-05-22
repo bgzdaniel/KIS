@@ -5,13 +5,14 @@ from collections import namedtuple, deque
 import numpy as np
 import random
 import time
-import math
+from torch.nn.modules.batchnorm import BatchNorm2d
+
+from torch.nn.modules.pooling import MaxPool2d
 
 # Tetris game functions
 
-game_rows = 16
-game_cols = 4
-middle = math.ceil(game_cols/2)
+game_rows = 10
+game_cols = 7
 
 def piece_step(game, pos, lower_pos):
     if not(piece_landed(game, lower_pos)):
@@ -25,28 +26,8 @@ def piece_step(game, pos, lower_pos):
 
 
 def create_piece(game):
-    #num = random.randrange(0, 1, 1)
-    num = 2
-    pos = []
-    lower_pos = []
-    if num == 0:
-        pos = [[0, 0], [0, 1], [0, 2], [0, 3]]
-        lower_pos = [[0, 0], [0, 1], [0, 2], [0, 3]]
-        game[0, 0] = 1
-        game[0, 1] = 1
-        game[0, 2] = 1
-        game[0, 3] = 1
-    elif num == 1:
-        pos = [[0, 0], [0, 1], [1, 0], [1, 1]]
-        lower_pos = [[1, 0], [1, 1]]
-        game[0, 0] = 1
-        game[0, 1] = 1
-        game[1, 0] = 1
-        game[1, 1] = 1
-    elif num == 2:
-        pos = [[0, middle]]
-        lower_pos = [[0, middle]]
-        game[0, middle] = 1
+    pos = [[0, 4]]
+    lower_pos = [[0, 4]]
     return pos, lower_pos
 
 
@@ -62,24 +43,24 @@ def game_over(lower_pos):
 
 
 def score(game):
-    scored = 0
-    for row in range(game.shape[0]):
-        scored_row = True
-        for col in range(game.shape[1]):
-            if(game[row, col] == 0):
-                scored_row = False
-                break
-        if(scored_row):
-            scored += 1
-            game[row, :] = 0
-            for i in reversed(range(0, row)):
-                for j in range(game.shape[1]):
-                    if(game[i, j] == 1):
-                        game[i, j] = 0
-                        game[i+1, j] = 1
-    reward = np.sum(game[-1])
-    reward += scored
-    return scored, reward
+    return np.sum(game[-1])
+
+    # reward = 0
+    # for row in range(game.shape[0]):
+    #     scored_row = True
+    #     for col in range(game.shape[1]):
+    #         if(game[row, col] == 0):
+    #             scored_row = False
+    #             break
+    #     if(scored_row):
+    #         reward += 1
+    #         game[row, :] = 0
+    #         for i in reversed(range(0, row)):
+    #             for j in range(game.shape[1]):
+    #                 if(game[i, j] == 1):
+    #                     game[i, j] = 0
+    #                     game[i+1, j] = 1
+    # return reward
 
 
 def move_left(game, pos, lower_pos):
@@ -153,26 +134,20 @@ class ExperienceReplay(object):
     def __len__(self):
         return len(self.memory)
 
-channels = 16
-neurons = 128
 
 class DqnNet(nn.Module):
     def __init__(self):
         super(DqnNet, self).__init__()
         self.conv_layers = nn.Sequential(
-            nn.Conv2d(1, channels, 3, padding=1),
-            nn.BatchNorm2d(channels),
-            nn.LeakyReLU(),
-            nn.Conv2d(channels, channels, 3, padding=1),
-            nn.BatchNorm2d(channels),
-            nn.LeakyReLU()
+            nn.Conv2d(1, 16, 3, padding=1),
+            nn.Tanh()
         )
         self.linear_layers = nn.Sequential(
-            nn.Linear(1*channels*game_rows*game_cols, neurons),
-            nn.LeakyReLU(),
-            nn.Linear(neurons, neurons),
-            nn.LeakyReLU(),
-            nn.Linear(neurons, 3)
+            nn.Linear(16 * game_rows * game_cols, 200),
+            nn.Tanh(),
+            nn.Linear(200, 200),
+            nn.Tanh(),
+            nn.Linear(200, 3),
         )
 
     def forward(self, x):
@@ -209,9 +184,12 @@ def update(loss_function, optimizer):
         else:
             target.append(torch.unsqueeze(replay.reward + discount *
                                           max(target_net(replay.next_state)), 0))
-
+    # print(target)
+    # print(prediction)
     target = torch.cat([t for t in target])
     prediction = torch.cat([t for t in prediction])
+    # print(f"target: {target}")
+    # print(f"prediction: {prediction}")
     loss = loss_function(prediction, target)
     optimizer.zero_grad()
     loss.backward()
@@ -221,8 +199,11 @@ def update(loss_function, optimizer):
 
 # initializations for the neural network
 random.seed()
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 policy_net = DqnNet()
+policy_net.to(device)
 target_net = DqnNet()
+target_net.to(device)
 target_net.load_state_dict(policy_net.state_dict())
 target_net.eval()
 loss_function = nn.SmoothL1Loss()  # Huber Loss
@@ -248,20 +229,35 @@ iteration = 0
 loss = 0
 
 while(True):
-
     reward = 0
     old_state = np.copy(game)
     action = select_action(numpy_to_tensor(game))
     move_piece(game, pos, lower_pos, action)
     if(piece_landed(game, lower_pos)):
         if(game_over(lower_pos)):
-            reward = -1
+            reward = -10
             game = np.zeros((game_rows, game_cols))
             lost += 1
         else:
-            curr_score, reward = score(game)
-            scored += curr_score
+            reward = np.sum(game[-1])
+            if np.sum(game[-1]) == game.shape[1]:
+                scored += 1 
+                game[1:] = game[0:-1]
+                game[0] = 0
+ 
         pos, lower_pos = create_piece(game)
+
+    if iteration % 1000 == 0:
+        print(f"--------------------\n")
+        print(f"iteration: {iteration}")
+        print(f"epsilon: {epsilon}")
+        print(f"action: {action}")
+        print(f"reward: {reward}")
+        print(f"lost: {lost}")
+        print(f"scored: {scored}")
+        print(f"loss (last iteration): {loss}")
+        print(f"\n{game}\n--------------------\n")
+
     memory.push(numpy_to_tensor(old_state), action,
                 numpy_to_tensor(game), reward)
 
@@ -275,15 +271,5 @@ while(True):
         target_net.eval()
         copy_weights_iter = 0
     copy_weights_iter += 1
-
-    if iteration % 500 == 0:
-        print(f"--------------------\n")
-        print(f"iteration: {iteration}")
-        print(f"epsilon: {epsilon}")
-        print(f"action: {action}")
-        print(f"reward: {reward}")
-        print(f"loss (last update): {loss}")
-        print(f"lost: {lost}")
-        print(f"scored: {scored}")
-        print(f"\n{game}\n--------------------\n")
+    
     iteration += 1

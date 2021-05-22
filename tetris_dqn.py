@@ -163,14 +163,9 @@ class DqnNet(nn.Module):
             nn.Conv2d(1, channels, 3, padding=1),
             nn.BatchNorm2d(channels),
             nn.LeakyReLU(),
-            nn.Conv2d(channels, channels, 3, padding=1),
-            nn.BatchNorm2d(channels),
-            nn.LeakyReLU()
         )
         self.linear_layers = nn.Sequential(
             nn.Linear(1*channels*game_rows*game_cols, neurons),
-            nn.LeakyReLU(),
-            nn.Linear(neurons, neurons),
             nn.LeakyReLU(),
             nn.Linear(neurons, 3)
         )
